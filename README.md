@@ -1,5 +1,28 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Supabase Auth Setup
+
+This project uses `@supabase/supabase-js` for auth in API routes:
+
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me` (protected)
+
+Create a local env file from `.env.example` and set:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=your_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
+```
+
+Then restart the dev server.
+
+For protected routes, pass the access token in the `Authorization` header:
+
+```bash
+Authorization: Bearer <access_token>
+```
+
 ## Getting Started
 
 First, run the development server:
