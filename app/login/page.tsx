@@ -148,14 +148,6 @@ export default function LoginPage() {
                 {message}
               </p>
             ) : null}
-
-            <p className="mt-6 text-sm text-zinc-600">
-              Need an account?{" "}
-              <Link className="font-medium text-zinc-900 underline decoration-emerald-500 underline-offset-4" href="/register">
-                Create one
-              </Link>
-              .
-            </p>
           </div>
         </div>
       </section>

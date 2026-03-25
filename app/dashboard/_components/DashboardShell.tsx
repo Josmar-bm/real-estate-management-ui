@@ -16,7 +16,6 @@ type Profile = {
 const navItems = [
   { href: "/dashboard", label: "Home" },
   { href: "/dashboard/projects", label: "Projects" },
-  { href: "/dashboard/estimates", label: "Estimates" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
 
