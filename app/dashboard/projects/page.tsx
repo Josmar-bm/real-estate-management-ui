@@ -52,6 +52,13 @@ export default function ProjectsPage() {
   const [category, setCategory] = useState<Project["category"]>("fix-n-flip");
   const [totalBudget, setTotalBudget] = useState("");
   const [startDate, setStartDate] = useState("");
+  const [purchasePrice, setPurchasePrice] = useState("0");
+  const [closingCosts, setClosingCosts] = useState("0");
+  const [loanAmount, setLoanAmount] = useState("0");
+  const [clientName, setClientName] = useState("");
+  const [paymentTerms, setPaymentTerms] = useState("");
+  const [totalContractValue, setTotalContractValue] = useState("0");
+  const [amountPaid, setAmountPaid] = useState("0");
 
   const canSubmit = useMemo(() => {
     return (
@@ -135,6 +142,17 @@ export default function ProjectsPage() {
           category,
           total_budget: totalBudget.trim() === "" ? undefined : totalBudget,
           start_date: startDate.trim() === "" ? undefined : startDate,
+          purchase_price:
+            category === "fix-n-flip" || category === "rental" ? (purchasePrice.trim() === "" ? undefined : purchasePrice) : undefined,
+          closing_costs:
+            category === "fix-n-flip" || category === "rental" ? (closingCosts.trim() === "" ? undefined : closingCosts) : undefined,
+          loan_amount:
+            category === "fix-n-flip" || category === "rental" ? (loanAmount.trim() === "" ? undefined : loanAmount) : undefined,
+          client_name: category === "contract_work" ? clientName : undefined,
+          payment_terms: category === "contract_work" ? paymentTerms : undefined,
+          total_contract_value:
+            category === "contract_work" ? (totalContractValue.trim() === "" ? undefined : totalContractValue) : undefined,
+          amount_paid: category === "contract_work" ? (amountPaid.trim() === "" ? undefined : amountPaid) : undefined,
         }),
       });
 
@@ -154,6 +172,13 @@ export default function ProjectsPage() {
       setCategory("fix-n-flip");
       setTotalBudget("");
       setStartDate("");
+      setPurchasePrice("0");
+      setClosingCosts("0");
+      setLoanAmount("0");
+      setClientName("");
+      setPaymentTerms("");
+      setTotalContractValue("0");
+      setAmountPaid("0");
       setShowForm(false);
       setMessage("Project added successfully.");
     } catch {
@@ -249,6 +274,114 @@ export default function ProjectsPage() {
               className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
             />
           </label>
+
+          {category === "fix-n-flip" || category === "rental" ? (
+            <>
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium text-zinc-700">Purchase Price</span>
+                <span className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm">
+                  <span className="font-medium text-zinc-500">$</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.01"
+                    value={purchasePrice}
+                    onChange={(event) => setPurchasePrice(event.target.value)}
+                    className="w-full bg-transparent outline-none"
+                  />
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium text-zinc-700">Closing Costs</span>
+                <span className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm">
+                  <span className="font-medium text-zinc-500">$</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.01"
+                    value={closingCosts}
+                    onChange={(event) => setClosingCosts(event.target.value)}
+                    className="w-full bg-transparent outline-none"
+                  />
+                </span>
+              </label>
+
+              <label className="block sm:col-span-2">
+                <span className="mb-2 block text-sm font-medium text-zinc-700">Loan Amount</span>
+                <span className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm">
+                  <span className="font-medium text-zinc-500">$</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.01"
+                    value={loanAmount}
+                    onChange={(event) => setLoanAmount(event.target.value)}
+                    className="w-full bg-transparent outline-none"
+                  />
+                </span>
+              </label>
+            </>
+          ) : null}
+
+          {category === "contract_work" ? (
+            <>
+              <label className="block sm:col-span-2">
+                <span className="mb-2 block text-sm font-medium text-zinc-700">Client Name</span>
+                <input
+                  value={clientName}
+                  onChange={(event) => setClientName(event.target.value)}
+                  placeholder="Client name"
+                  className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                />
+              </label>
+
+              <label className="block sm:col-span-2">
+                <span className="mb-2 block text-sm font-medium text-zinc-700">Payment Terms</span>
+                <input
+                  value={paymentTerms}
+                  onChange={(event) => setPaymentTerms(event.target.value)}
+                  placeholder="Net 30"
+                  className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium text-zinc-700">Total Contract Value</span>
+                <span className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm">
+                  <span className="font-medium text-zinc-500">$</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.01"
+                    value={totalContractValue}
+                    onChange={(event) => setTotalContractValue(event.target.value)}
+                    className="w-full bg-transparent outline-none"
+                  />
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium text-zinc-700">Amount Paid</span>
+                <span className="flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm">
+                  <span className="font-medium text-zinc-500">$</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.01"
+                    value={amountPaid}
+                    onChange={(event) => setAmountPaid(event.target.value)}
+                    className="w-full bg-transparent outline-none"
+                  />
+                </span>
+              </label>
+            </>
+          ) : null}
 
           <div className="sm:col-span-2">
             <button

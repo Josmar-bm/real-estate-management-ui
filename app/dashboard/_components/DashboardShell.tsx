@@ -29,7 +29,11 @@ export function DashboardShell({ children }: DashboardShellProps) {
     typeof window !== "undefined" ? window.localStorage.getItem("access_token") : null;
   const hasToken = Boolean(accessToken);
 
-  const activePageTitle = navItems.find((item) => item.href === pathname)?.label ?? "Dashboard";
+  let activePageTitle = navItems.find((item) => item.href === pathname)?.label ?? "Dashboard";
+  if (pathname.startsWith("/dashboard/projects/") && pathname !== "/dashboard/projects") {
+    activePageTitle = "Project Overview";
+  }
+
   const displayName = profile?.displayName ?? "Agent";
   const email = profile?.email ?? "No email";
 

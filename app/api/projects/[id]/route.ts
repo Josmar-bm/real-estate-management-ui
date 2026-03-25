@@ -2,24 +2,47 @@ import { NextResponse } from "next/server";
 import { withApiAuth } from "@/lib/api-auth";
 
 type ProjectCategory = "fix-n-flip" | "rental" | "contract_work";
+type ProjectStatus = "planning" | "in-progress" | "on-hold" | "completed";
+
+type ProjectUpdateBody = {
+  status?: unknown;
+};
 
 type ProjectRecord = {
   id: string;
   name: string;
-  status: string;
+  status: ProjectStatus;
   category: ProjectCategory;
   total_budget: number | null;
   start_date: string | null;
 };
 
+const allowedStatuses: ProjectStatus[] = ["planning", "in-progress", "on-hold", "completed"];
+
 type MaterialExpenseRecord = {
   id: string;
   project_id: string | null;
   vendor_id: string | null;
-  item_name: string;
+  name: string;
+  description: string | null;
   cost: number;
   receipt_path: string | null;
   purchase_date: string | null;
+};
+
+type ProjectInvestmentRecord = {
+  project_id: string;
+  purchase_price: number | null;
+  closing_costs: number | null;
+  loan_amount: number | null;
+};
+
+type ProjectContractRecord = {
+  project_id: string;
+  client_name: string | null;
+  payment_terms: string | null;
+  total_contract_value: number | null;
+  amount_paid: number | null;
 };
 
 type LaborLogRecord = {
@@ -73,7 +96,7 @@ export async function GET(
     const expensesUrl = new URL(`${config.supabaseUrl}/rest/v1/material_expenses`);
     expensesUrl.searchParams.set(
       "select",
-      "id,project_id,vendor_id,item_name,cost,receipt_path,purchase_date"
+      "id,project_id,vendor_id,name,description,cost,receipt_path,purchase_date"
     );
     expensesUrl.searchParams.set("project_id", `eq.${id}`);
     expensesUrl.searchParams.set("order", "purchase_date.desc.nullslast");
@@ -86,7 +109,17 @@ export async function GET(
     laborLogUrl.searchParams.set("project_id", `eq.${id}`);
     laborLogUrl.searchParams.set("order", "work_date.desc.nullslast");
 
-    const [projectResponse, expensesResponse, laborLogResponse] = await Promise.all([
+    const investmentUrl = new URL(`${config.supabaseUrl}/rest/v1/project_investments`);
+    investmentUrl.searchParams.set("select", "project_id,purchase_price,closing_costs,loan_amount");
+    investmentUrl.searchParams.set("project_id", `eq.${id}`);
+    investmentUrl.searchParams.set("limit", "1");
+
+    const contractUrl = new URL(`${config.supabaseUrl}/rest/v1/project_contracts`);
+    contractUrl.searchParams.set("select", "project_id,client_name,payment_terms,total_contract_value,amount_paid");
+    contractUrl.searchParams.set("project_id", `eq.${id}`);
+    contractUrl.searchParams.set("limit", "1");
+
+    const [projectResponse, expensesResponse, laborLogResponse, investmentResponse, contractResponse] = await Promise.all([
       fetch(projectUrl.toString(), {
         method: "GET",
         headers: buildHeaders(token, config.supabaseAnonKey),
@@ -96,6 +129,14 @@ export async function GET(
         headers: buildHeaders(token, config.supabaseAnonKey),
       }),
       fetch(laborLogUrl.toString(), {
+        method: "GET",
+        headers: buildHeaders(token, config.supabaseAnonKey),
+      }),
+      fetch(investmentUrl.toString(), {
+        method: "GET",
+        headers: buildHeaders(token, config.supabaseAnonKey),
+      }),
+      fetch(contractUrl.toString(), {
         method: "GET",
         headers: buildHeaders(token, config.supabaseAnonKey),
       }),
@@ -178,10 +219,59 @@ export async function GET(
     const laborLogs = laborPayload as LaborLogRecord[];
     const laborCostTotal = laborLogs.reduce((sum, entry) => sum + Number(entry.total_labor_cost ?? 0), 0);
 
+    const investmentPayload = (await investmentResponse.json().catch(() => [])) as
+      | ProjectInvestmentRecord[]
+      | { message?: string; details?: string; hint?: string; code?: string };
+
+    if (!investmentResponse.ok) {
+      const errorPayload = investmentPayload as {
+        message?: string;
+        details?: string;
+        hint?: string;
+        code?: string;
+      };
+      return NextResponse.json(
+        {
+          message: errorPayload.message ?? "Unable to load project investments.",
+          details: errorPayload.details,
+          hint: errorPayload.hint,
+          code: errorPayload.code,
+        },
+        { status: investmentResponse.status }
+      );
+    }
+
+    const contractPayload = (await contractResponse.json().catch(() => [])) as
+      | ProjectContractRecord[]
+      | { message?: string; details?: string; hint?: string; code?: string };
+
+    if (!contractResponse.ok) {
+      const errorPayload = contractPayload as {
+        message?: string;
+        details?: string;
+        hint?: string;
+        code?: string;
+      };
+      return NextResponse.json(
+        {
+          message: errorPayload.message ?? "Unable to load project contracts.",
+          details: errorPayload.details,
+          hint: errorPayload.hint,
+          code: errorPayload.code,
+        },
+        { status: contractResponse.status }
+      );
+    }
+
+    const [projectInvestment] = investmentPayload as ProjectInvestmentRecord[];
+    const [projectContract] = contractPayload as ProjectContractRecord[];
+
     return NextResponse.json({
       project,
       materialExpenses,
       laborLogs,
+      projectInvestment: projectInvestment ?? null,
+      projectContract: projectContract ?? null,
       summary: {
         materialExpenseCount: materialExpenses.length,
         materialExpenseTotal,
@@ -189,5 +279,76 @@ export async function GET(
         laborCostTotal,
       },
     });
+  });
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  return withApiAuth(request, async ({ token }) => {
+    const config = getSupabaseConfig();
+    if (!config) {
+      return NextResponse.json({ message: "Supabase environment is not configured." }, { status: 500 });
+    }
+
+    const { id } = await context.params;
+    if (!id) {
+      return NextResponse.json({ message: "Project id is required." }, { status: 400 });
+    }
+
+    let body: ProjectUpdateBody;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ message: "Invalid JSON body." }, { status: 400 });
+    }
+
+    const status = String(body.status ?? "").trim() as ProjectStatus;
+    if (!allowedStatuses.includes(status)) {
+      return NextResponse.json(
+        { message: "Status must be one of: planning, in-progress, on-hold, completed." },
+        { status: 400 }
+      );
+    }
+
+    const updateUrl = new URL(`${config.supabaseUrl}/rest/v1/projects`);
+    updateUrl.searchParams.set("id", `eq.${id}`);
+    updateUrl.searchParams.set("select", "id,name,status,category,total_budget,start_date");
+
+    const response = await fetch(updateUrl.toString(), {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${token}`,
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify({ status }),
+    });
+
+    const payload = (await response.json().catch(() => [])) as
+      | ProjectRecord[]
+      | { message?: string; details?: string; hint?: string; code?: string };
+
+    if (!response.ok) {
+      const errorPayload = payload as { message?: string; details?: string; hint?: string; code?: string };
+      return NextResponse.json(
+        {
+          message: errorPayload.message ?? errorPayload.details ?? "Unable to update project status.",
+          details: errorPayload.details,
+          hint: errorPayload.hint,
+          code: errorPayload.code,
+        },
+        { status: response.status }
+      );
+    }
+
+    const [project] = payload as ProjectRecord[];
+    if (!project) {
+      return NextResponse.json({ message: "Project not found." }, { status: 404 });
+    }
+
+    return NextResponse.json({ project });
   });
 }

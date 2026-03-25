@@ -3,7 +3,8 @@ import { withApiAuth } from "@/lib/api-auth";
 import { randomUUID } from "crypto";
 
 type MaterialExpenseBody = {
-  item_name?: unknown;
+  name?: unknown;
+  description?: unknown;
   cost?: unknown;
   vendor_id?: unknown;
   receipt_path?: unknown;
@@ -14,7 +15,8 @@ type MaterialExpenseRecord = {
   id: string;
   project_id: string;
   vendor_id?: string;
-  item_name: string;
+  name: string;
+  description?: string;
   cost: number;
   receipt_path?: string;
   purchase_date?: string;
@@ -66,30 +68,39 @@ export async function POST(
       return NextResponse.json({ message: "Invalid JSON body." }, { status: 400 });
     }
 
-    const itemName = String(body.item_name ?? "").trim();
+    const name = String(body.name ?? "").trim();
+    const description = String(body.description ?? "").trim();
     const vendorId = String(body.vendor_id ?? "").trim();
     const receiptPath = String(body.receipt_path ?? "").trim();
     const purchaseDate = String(body.purchase_date ?? "").trim();
     const cost = parseRequiredNumericField(body.cost, "Cost");
 
-    if (!itemName) {
-      return NextResponse.json({ message: "Item name is required." }, { status: 400 });
+    if (!name) {
+      return NextResponse.json({ message: "Name is required." }, { status: 400 });
     }
 
     if (cost.error) {
       return NextResponse.json({ message: cost.error }, { status: 400 });
     }
 
-    if (purchaseDate && Number.isNaN(Date.parse(purchaseDate))) {
+    if (!purchaseDate) {
+      return NextResponse.json({ message: "Purchase date is required." }, { status: 400 });
+    }
+
+    if (Number.isNaN(Date.parse(purchaseDate))) {
       return NextResponse.json({ message: "Purchase date must be a valid date." }, { status: 400 });
     }
 
     const expenseToInsert: MaterialExpenseRecord = {
       id: randomUUID(),
       project_id: projectId,
-      item_name: itemName,
+      name,
       cost: cost.value ?? 0,
     };
+
+    if (description) {
+      expenseToInsert.description = description;
+    }
 
     if (vendorId) {
       expenseToInsert.vendor_id = vendorId;

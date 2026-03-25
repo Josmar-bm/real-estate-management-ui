@@ -8,6 +8,13 @@ type ProjectBody = {
   category?: unknown;
   total_budget?: unknown;
   start_date?: unknown;
+  purchase_price?: unknown;
+  closing_costs?: unknown;
+  loan_amount?: unknown;
+  client_name?: unknown;
+  payment_terms?: unknown;
+  total_contract_value?: unknown;
+  amount_paid?: unknown;
 };
 
 type ProjectCategory = "fix-n-flip" | "rental" | "contract_work";
@@ -20,6 +27,21 @@ type ProjectRecord = {
   category: ProjectCategory;
   total_budget: number | null;
   start_date: string | null;
+};
+
+type ProjectInvestmentInsert = {
+  project_id: string;
+  purchase_price: number;
+  closing_costs: number;
+  loan_amount: number;
+};
+
+type ProjectContractInsert = {
+  project_id: string;
+  client_name: string | null;
+  payment_terms: string | null;
+  total_contract_value: number;
+  amount_paid: number;
 };
 
 const allowedCategories: ProjectCategory[] = ["fix-n-flip", "rental", "contract_work"];
@@ -139,6 +161,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "Start date must be a valid date." }, { status: 400 });
     }
 
+    const purchasePrice = parseOptionalNumericField(body.purchase_price, "Purchase price");
+    const closingCosts = parseOptionalNumericField(body.closing_costs, "Closing costs");
+    const loanAmount = parseOptionalNumericField(body.loan_amount, "Loan amount");
+    const totalContractValue = parseOptionalNumericField(body.total_contract_value, "Total contract value");
+    const amountPaid = parseOptionalNumericField(body.amount_paid, "Amount paid");
+    const clientName = String(body.client_name ?? "").trim();
+    const paymentTerms = String(body.payment_terms ?? "").trim();
+
+    if ((category === "fix-n-flip" || category === "rental") && purchasePrice.error) {
+      return NextResponse.json({ message: purchasePrice.error }, { status: 400 });
+    }
+
+    if ((category === "fix-n-flip" || category === "rental") && closingCosts.error) {
+      return NextResponse.json({ message: closingCosts.error }, { status: 400 });
+    }
+
+    if ((category === "fix-n-flip" || category === "rental") && loanAmount.error) {
+      return NextResponse.json({ message: loanAmount.error }, { status: 400 });
+    }
+
+    if (category === "contract_work" && totalContractValue.error) {
+      return NextResponse.json({ message: totalContractValue.error }, { status: 400 });
+    }
+
+    if (category === "contract_work" && amountPaid.error) {
+      return NextResponse.json({ message: amountPaid.error }, { status: 400 });
+    }
+
     const projectToInsert: {
       id: string;
       name: string;
@@ -191,6 +241,102 @@ export async function POST(request: Request) {
     }
 
     const [project] = payload as ProjectRecord[];
+
+    if (category === "fix-n-flip" || category === "rental") {
+      const investmentRecord: ProjectInvestmentInsert = {
+        project_id: project.id,
+        purchase_price: purchasePrice.value ?? 0,
+        closing_costs: closingCosts.value ?? 0,
+        loan_amount: loanAmount.value ?? 0,
+      };
+
+      const investmentResponse = await fetch(`${config.supabaseUrl}/rest/v1/project_investments`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify(investmentRecord),
+      });
+
+      if (!investmentResponse.ok) {
+        const errorPayload = (await investmentResponse.json().catch(() => ({}))) as {
+          message?: string;
+          details?: string;
+          hint?: string;
+          code?: string;
+        };
+
+        await fetch(`${config.supabaseUrl}/rest/v1/projects?id=eq.${project.id}`, {
+          method: "DELETE",
+          headers: {
+            apikey: config.supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+          },
+        }).catch(() => null);
+
+        return NextResponse.json(
+          {
+            message: errorPayload.message ?? errorPayload.details ?? "Unable to create project investment details.",
+            details: errorPayload.details,
+            hint: errorPayload.hint,
+            code: errorPayload.code,
+          },
+          { status: investmentResponse.status }
+        );
+      }
+    }
+
+    if (category === "contract_work") {
+      const contractRecord: ProjectContractInsert = {
+        project_id: project.id,
+        client_name: clientName || null,
+        payment_terms: paymentTerms || null,
+        total_contract_value: totalContractValue.value ?? 0,
+        amount_paid: amountPaid.value ?? 0,
+      };
+
+      const contractResponse = await fetch(`${config.supabaseUrl}/rest/v1/project_contracts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify(contractRecord),
+      });
+
+      if (!contractResponse.ok) {
+        const errorPayload = (await contractResponse.json().catch(() => ({}))) as {
+          message?: string;
+          details?: string;
+          hint?: string;
+          code?: string;
+        };
+
+        await fetch(`${config.supabaseUrl}/rest/v1/projects?id=eq.${project.id}`, {
+          method: "DELETE",
+          headers: {
+            apikey: config.supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+          },
+        }).catch(() => null);
+
+        return NextResponse.json(
+          {
+            message: errorPayload.message ?? errorPayload.details ?? "Unable to create project contract details.",
+            details: errorPayload.details,
+            hint: errorPayload.hint,
+            code: errorPayload.code,
+          },
+          { status: contractResponse.status }
+        );
+      }
+    }
+
     return NextResponse.json({ project }, { status: 201 });
   });
 }
