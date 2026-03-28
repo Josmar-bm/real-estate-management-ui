@@ -12,6 +12,7 @@ type LaborEntryInput = {
 
 type LaborBulkBody = {
   entries?: unknown;
+  deleteIds?: unknown;
 };
 
 type LaborLogRecord = {
@@ -76,12 +77,29 @@ export async function POST(
     }
 
     if (!Array.isArray(body.entries) || body.entries.length === 0) {
-      return NextResponse.json({ message: "entries must be a non-empty array." }, { status: 400 });
+      if (!Array.isArray(body.entries) && body.entries !== undefined) {
+        return NextResponse.json({ message: "entries must be an array when provided." }, { status: 400 });
+      }
+    }
+
+    if (!Array.isArray(body.deleteIds) && body.deleteIds !== undefined) {
+      return NextResponse.json({ message: "deleteIds must be an array when provided." }, { status: 400 });
+    }
+
+    const rawEntries = Array.isArray(body.entries) ? body.entries : [];
+    const rawDeleteIds = Array.isArray(body.deleteIds) ? body.deleteIds : [];
+
+    if (rawEntries.length === 0 && rawDeleteIds.length === 0) {
+      return NextResponse.json(
+        { message: "Provide at least one entry to save or one id to delete." },
+        { status: 400 }
+      );
     }
 
     const rows: LaborLogRecord[] = [];
+    const deleteIds: string[] = [];
 
-    for (const rawEntry of body.entries) {
+    for (const rawEntry of rawEntries) {
       const entry = rawEntry as LaborEntryInput;
 
       const personId = String(entry.person_id ?? "").trim();
@@ -121,36 +139,94 @@ export async function POST(
       });
     }
 
-    const endpoint = `${config.supabaseUrl}/rest/v1/labor_log?on_conflict=id`;
+    for (const rawId of rawDeleteIds) {
+      const id = String(rawId ?? "").trim();
+      if (!id) {
+        continue;
+      }
 
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: config.supabaseAnonKey,
-        Authorization: `Bearer ${token}`,
-        Prefer: "resolution=merge-duplicates,return=representation",
-      },
-      body: JSON.stringify(rows),
-    });
+      if (!/^[a-zA-Z0-9-]+$/.test(id)) {
+        return NextResponse.json({ message: "deleteIds contains an invalid id." }, { status: 400 });
+      }
 
-    const payload = (await response.json().catch(() => [])) as
-      | LaborLogRecord[]
-      | { message?: string; details?: string; hint?: string; code?: string };
-
-    if (!response.ok) {
-      const errorPayload = payload as { message?: string; details?: string; hint?: string; code?: string };
-      return NextResponse.json(
-        {
-          message: errorPayload.message ?? errorPayload.details ?? "Unable to save labor log entries.",
-          details: errorPayload.details,
-          hint: errorPayload.hint,
-          code: errorPayload.code,
-        },
-        { status: response.status }
-      );
+      deleteIds.push(id);
     }
 
-    return NextResponse.json({ laborLogs: payload as LaborLogRecord[] }, { status: 200 });
+    const uniqueDeleteIds = Array.from(new Set(deleteIds));
+
+    let savedRows: LaborLogRecord[] = [];
+
+    if (rows.length > 0) {
+      const upsertEndpoint = `${config.supabaseUrl}/rest/v1/labor_log?on_conflict=id`;
+
+      const upsertResponse = await fetch(upsertEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+          Prefer: "resolution=merge-duplicates,return=representation",
+        },
+        body: JSON.stringify(rows),
+      });
+
+      const upsertPayload = (await upsertResponse.json().catch(() => [])) as
+        | LaborLogRecord[]
+        | { message?: string; details?: string; hint?: string; code?: string };
+
+      if (!upsertResponse.ok) {
+        const errorPayload = upsertPayload as { message?: string; details?: string; hint?: string; code?: string };
+        return NextResponse.json(
+          {
+            message: errorPayload.message ?? errorPayload.details ?? "Unable to save labor log entries.",
+            details: errorPayload.details,
+            hint: errorPayload.hint,
+            code: errorPayload.code,
+          },
+          { status: upsertResponse.status }
+        );
+      }
+
+      savedRows = upsertPayload as LaborLogRecord[];
+    }
+
+    if (uniqueDeleteIds.length > 0) {
+      const deleteEndpoint = new URL(`${config.supabaseUrl}/rest/v1/labor_log`);
+      deleteEndpoint.searchParams.set("project_id", `eq.${projectId}`);
+      deleteEndpoint.searchParams.set("id", `in.(${uniqueDeleteIds.join(",")})`);
+
+      const deleteResponse = await fetch(deleteEndpoint.toString(), {
+        method: "DELETE",
+        headers: {
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${token}`,
+          Prefer: "return=minimal",
+        },
+      });
+
+      if (!deleteResponse.ok) {
+        const deletePayload = (await deleteResponse.json().catch(() => ({}))) as {
+          message?: string;
+          details?: string;
+          hint?: string;
+          code?: string;
+        };
+
+        return NextResponse.json(
+          {
+            message: deletePayload.message ?? deletePayload.details ?? "Unable to delete labor log entries.",
+            details: deletePayload.details,
+            hint: deletePayload.hint,
+            code: deletePayload.code,
+          },
+          { status: deleteResponse.status }
+        );
+      }
+    }
+
+    return NextResponse.json(
+      { laborLogs: savedRows, savedCount: rows.length, deletedCount: uniqueDeleteIds.length },
+      { status: 200 }
+    );
   });
 }

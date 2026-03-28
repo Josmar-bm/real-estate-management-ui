@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  type Cell,
+  type Row,
   createColumnHelper,
   flexRender,
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 type Project = {
   id: string;
@@ -146,6 +149,446 @@ function formatMonthDay(value: string | null) {
   }).format(date);
 }
 
+function formatMonthDayWithWeekday(value: string | null) {
+  if (!value) {
+    return { monthDay: "Not set", weekday: "" };
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return { monthDay: value, weekday: "" };
+  }
+
+  const monthDay = new Intl.DateTimeFormat("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+  }).format(date);
+
+  return { monthDay, weekday };
+}
+
+type TimesheetHoursInputProps = {
+  value: string;
+  onCommit: (value: string) => void;
+};
+
+const TimesheetHoursInput = memo(function TimesheetHoursInput({ value, onCommit }: TimesheetHoursInputProps) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  return (
+    <input
+      value={draft}
+      onChange={(event) => {
+        const raw = event.target.value.replace(/\D/g, "").slice(0, 2);
+        const next = raw !== "" && Number(raw) === 0 ? "" : raw;
+        setDraft(next);
+      }}
+      onBlur={() => onCommit(draft)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        }
+      }}
+      type="text"
+      maxLength={2}
+      inputMode="decimal"
+      className="w-20 rounded-lg border border-zinc-300 bg-white px-2 py-1 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+    />
+  );
+});
+
+type TimesheetPayRateInputProps = {
+  value: string;
+  onCommit: (value: string) => void;
+};
+
+const TimesheetPayRateInput = memo(function TimesheetPayRateInput({ value, onCommit }: TimesheetPayRateInputProps) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-zinc-500">$</span>
+      <input
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+        }}
+        onBlur={() => onCommit(draft)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+        }}
+        inputMode="decimal"
+        className="w-24 rounded-lg border border-zinc-300 bg-white py-1 pl-5 pr-2 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+      />
+    </div>
+  );
+});
+
+type TimesheetTableCellProps = {
+  cell: Cell<TimesheetRow, unknown>;
+};
+
+const TimesheetTableCell = memo(function TimesheetTableCell({ cell }: TimesheetTableCellProps) {
+  return <td className="px-3 py-2">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>;
+});
+
+type TimesheetVirtualTableRowProps = {
+  row: Row<TimesheetRow>;
+};
+
+const TimesheetVirtualTableRow = memo(function TimesheetVirtualTableRow({ row }: TimesheetVirtualTableRowProps) {
+  return (
+    <tr className="align-top">
+      {row.getVisibleCells().map((cell) => (
+        <TimesheetTableCell key={cell.id} cell={cell} />
+      ))}
+    </tr>
+  );
+});
+
+type MaterialExpensesTableRowProps = {
+  expense: MaterialExpense;
+  vendorName: string;
+  receiptFileName: string;
+  isReceiptActionActive: boolean;
+  isUploadingInlineReceipt: boolean;
+  onViewReceipt: (expenseId: string, storagePath: string) => void;
+  onDownloadReceipt: (expenseId: string, storagePath: string) => void;
+  onInlineReceiptFileSelected: (expenseId: string, file: File | null) => void;
+};
+
+const MaterialExpensesTableRow = memo(function MaterialExpensesTableRow({
+  expense,
+  vendorName,
+  receiptFileName,
+  isReceiptActionActive,
+  isUploadingInlineReceipt,
+  onViewReceipt,
+  onDownloadReceipt,
+  onInlineReceiptFileSelected,
+}: MaterialExpensesTableRowProps) {
+  return (
+    <tr className="align-top">
+      <td className="px-4 py-3 font-medium text-zinc-900">{expense.name}</td>
+      <td className="px-4 py-3 text-zinc-600">{expense.description ?? "Not provided"}</td>
+      <td className="px-4 py-3 text-zinc-600">{formatMonthDay(expense.purchase_date)}</td>
+      <td className="px-4 py-3 text-zinc-600">{vendorName}</td>
+      <td className="px-4 py-3 font-semibold text-zinc-900">{formatCurrency(expense.cost)}</td>
+      <td className="px-4 py-3 text-zinc-600">
+        {expense.receipt_path ? (
+          <div className="flex flex-col gap-2">
+            <p className="truncate text-xs text-zinc-500">{receiptFileName}</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => onViewReceipt(expense.id, expense.receipt_path as string)}
+                disabled={isReceiptActionActive}
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-900 transition hover:border-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                View
+              </button>
+              <button
+                type="button"
+                onClick={() => onDownloadReceipt(expense.id, expense.receipt_path as string)}
+                disabled={isReceiptActionActive}
+                className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
+              >
+                Download
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-zinc-500">Not uploaded</p>
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={(event) => onInlineReceiptFileSelected(expense.id, event.target.files?.[0] ?? null)}
+              disabled={isUploadingInlineReceipt}
+              className="w-full max-w-[240px] rounded-lg border border-zinc-300 bg-white px-2 py-1 text-xs outline-none transition file:mr-2 file:rounded-md file:border-0 file:bg-zinc-900 file:px-2 file:py-1 file:text-[10px] file:font-semibold file:text-white hover:file:bg-zinc-700"
+            />
+            {isUploadingInlineReceipt ? <p className="text-xs font-medium text-zinc-600">Uploading...</p> : null}
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+});
+
+type LaborLogsTableRowProps = {
+  entry: LaborLog;
+  personName: string;
+};
+
+const LaborLogsTableRow = memo(function LaborLogsTableRow({ entry, personName }: LaborLogsTableRowProps) {
+  return (
+    <tr className="align-top">
+      <td className="px-4 py-3 text-zinc-600">{formatMonthDay(entry.work_date)}</td>
+      <td className="px-4 py-3 text-zinc-600">{personName}</td>
+      <td className="px-4 py-3 text-zinc-600">{entry.hours_worked ?? 0}</td>
+      <td className="px-4 py-3 text-zinc-600">
+        {entry.pay_rate_applied !== null ? formatCurrency(entry.pay_rate_applied) : "Not set"}
+      </td>
+      <td className="px-4 py-3 font-semibold text-zinc-900">
+        {entry.total_labor_cost !== null ? formatCurrency(entry.total_labor_cost) : formatCurrency(0)}
+      </td>
+    </tr>
+  );
+});
+
+type TimesheetSectionProps = {
+  weekStart: string;
+  onWeekStartChange: (value: string) => void;
+  selectedPersonId: string;
+  onSelectedPersonIdChange: (value: string) => void;
+  personnel: Personnel[];
+  timesheetRows: TimesheetRow[];
+  weekDates: string[];
+  onAddTimesheetRow: () => void;
+  onUpdateTimesheetHours: (personId: string, date: string, nextValue: string) => void;
+  onUpdateTimesheetPayRate: (personId: string, nextValue: string) => void;
+  onSaveTimesheet: () => void;
+  isSavingTimesheet: boolean;
+  formError: string | null;
+  formMessage: string | null;
+};
+
+const TimesheetSection = memo(function TimesheetSection({
+  weekStart,
+  onWeekStartChange,
+  selectedPersonId,
+  onSelectedPersonIdChange,
+  personnel,
+  timesheetRows,
+  weekDates,
+  onAddTimesheetRow,
+  onUpdateTimesheetHours,
+  onUpdateTimesheetPayRate,
+  onSaveTimesheet,
+  isSavingTimesheet,
+  formError,
+  formMessage,
+}: TimesheetSectionProps) {
+  const timesheetScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const timesheetColumns = useMemo(() => {
+    const dateColumns = weekDates.map((date) =>
+      columnHelper.display({
+        id: date,
+        header: () => {
+          const parts = formatMonthDayWithWeekday(date);
+          return (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span>{parts.monthDay}</span>
+              {parts.weekday ? <span className="text-zinc-400 normal-case">{parts.weekday}</span> : null}
+            </span>
+          );
+        },
+        cell: ({ row }) => (
+          <TimesheetHoursInput
+            value={row.original.hoursByDate[date] ?? ""}
+            onCommit={(next) => onUpdateTimesheetHours(row.original.personId, date, next)}
+          />
+        ),
+      })
+    );
+
+    return [
+      columnHelper.accessor("personId", {
+        header: "Person",
+        cell: ({ row }) => (
+          <div>
+            <p className="font-medium text-zinc-900">{row.original.personName}</p>
+          </div>
+        ),
+      }),
+      columnHelper.display({
+        id: "payRate",
+        header: "Pay Rate",
+        cell: ({ row }) => (
+          <TimesheetPayRateInput
+            value={row.original.payRate}
+            onCommit={(next) => onUpdateTimesheetPayRate(row.original.personId, next)}
+          />
+        ),
+      }),
+      ...dateColumns,
+      columnHelper.display({
+        id: "totalPay",
+        header: "Total Pay",
+        cell: ({ row }) => {
+          const payRate = Number(row.original.payRate);
+          const totalHours = weekDates.reduce((sum, date) => {
+            const value = Number(row.original.hoursByDate[date] ?? 0);
+            if (!Number.isFinite(value) || value <= 0) {
+              return sum;
+            }
+            return sum + value;
+          }, 0);
+
+          if (!Number.isFinite(payRate) || payRate <= 0 || totalHours <= 0) {
+            return <span className="text-zinc-500">-</span>;
+          }
+
+          return <span className="font-semibold text-zinc-900">{formatCurrency(totalHours * payRate)}</span>;
+        },
+      }),
+    ];
+  }, [weekDates, onUpdateTimesheetHours, onUpdateTimesheetPayRate]);
+
+  const timesheetTable = useReactTable({
+    data: timesheetRows,
+    columns: timesheetColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  const timesheetTableRows = timesheetTable.getRowModel().rows;
+
+  const timesheetRowVirtualizer = useVirtualizer({
+    count: timesheetTableRows.length,
+    getScrollElement: () => timesheetScrollRef.current,
+    estimateSize: () => 48,
+    overscan: 8,
+  });
+
+  const timesheetVirtualRows = timesheetRowVirtualizer.getVirtualItems();
+  const timesheetPaddingTop = timesheetVirtualRows.length > 0 ? timesheetVirtualRows[0].start : 0;
+  const timesheetPaddingBottom =
+    timesheetVirtualRows.length > 0
+      ? timesheetRowVirtualizer.getTotalSize() - timesheetVirtualRows[timesheetVirtualRows.length - 1].end
+      : 0;
+
+  return (
+    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-5">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Timesheet Grid</p>
+      <p className="mt-2 text-sm text-zinc-600">
+        Enter hours by person and day. Use the week start picker to change the visible week.
+      </p>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-[220px_1fr_auto] md:items-end">
+        <label className="block">
+          <span className="mb-2 block text-sm font-medium text-zinc-700">Week Start (Monday)</span>
+          <input
+            type="date"
+            value={weekStart}
+            onChange={(event) => onWeekStartChange(event.target.value)}
+            className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-2 block text-sm font-medium text-zinc-700">Add Worker Row</span>
+          <select
+            value={selectedPersonId}
+            onChange={(event) => onSelectedPersonIdChange(event.target.value)}
+            className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+          >
+            <option value="">Select worker...</option>
+            {personnel.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+                {person.worker_type ? ` (${person.worker_type})` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          onClick={onAddTimesheetRow}
+          className="rounded-xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-900 transition hover:border-zinc-900"
+        >
+          Add Row
+        </button>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-2xl border border-zinc-200 bg-white">
+        <div ref={timesheetScrollRef} className="max-h-[520px] overflow-auto">
+          <table className="min-w-full divide-y divide-zinc-200 text-sm">
+            <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+              {timesheetTable.getHeaderGroups().map((headerGroup) => (
+                <tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <th key={header.id} className="whitespace-nowrap px-3 py-3">
+                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    </th>
+                  ))}
+                </tr>
+              ))}
+            </thead>
+            <tbody className="divide-y divide-zinc-200">
+              {timesheetTableRows.length === 0 ? (
+                <tr>
+                  <td className="px-4 py-4 text-zinc-600" colSpan={Math.max(timesheetColumns.length, 1)}>
+                    No people in this week yet. Add a person row to start entering hours.
+                  </td>
+                </tr>
+              ) : (
+                <>
+                  {timesheetPaddingTop > 0 ? (
+                    <tr>
+                      <td style={{ height: `${timesheetPaddingTop}px` }} colSpan={Math.max(timesheetColumns.length, 1)} />
+                    </tr>
+                  ) : null}
+
+                  {timesheetVirtualRows.map((virtualRow) => {
+                    const row = timesheetTableRows[virtualRow.index];
+                    if (!row) {
+                      return null;
+                    }
+
+                    return (
+                      <TimesheetVirtualTableRow key={row.id} row={row} />
+                    );
+                  })}
+
+                  {timesheetPaddingBottom > 0 ? (
+                    <tr>
+                      <td style={{ height: `${timesheetPaddingBottom}px` }} colSpan={Math.max(timesheetColumns.length, 1)} />
+                    </tr>
+                  ) : null}
+                </>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-col gap-3">
+        <button
+          type="button"
+          onClick={onSaveTimesheet}
+          disabled={isSavingTimesheet}
+          className="w-fit rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
+        >
+          {isSavingTimesheet ? "Saving..." : "Save Timesheet"}
+        </button>
+
+        {formError ? (
+          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{formError}</p>
+        ) : null}
+        {formMessage ? (
+          <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{formMessage}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+});
+
 export default function ProjectDetailsPage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id;
@@ -156,7 +599,8 @@ export default function ProjectDetailsPage() {
   const [materialExpenseTotal, setMaterialExpenseTotal] = useState(0);
   const [laborCostTotal, setLaborCostTotal] = useState(0);
   const [activeTab, setActiveTab] = useState<"overview" | "project-details" | "material-expenses" | "labor-log">("overview");
-  const [weekStart, setWeekStart] = useState<string>(() => {
+  const [weekStart, setWeekStart] = useState("");
+  const [initialWeekStart] = useState(() => {
     const today = new Date();
     const day = today.getDay();
     const diffToMonday = day === 0 ? -6 : 1 - day;
@@ -169,6 +613,12 @@ export default function ProjectDetailsPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [selectedPersonId, setSelectedPersonId] = useState("");
   const [laborLogPersonFilter, setLaborLogPersonFilter] = useState("all");
+  const [laborLogStartDate, setLaborLogStartDate] = useState("");
+  const [laborLogEndDate, setLaborLogEndDate] = useState("");
+  const [materialPageSize, setMaterialPageSize] = useState(10);
+  const [materialPage, setMaterialPage] = useState(1);
+  const [laborPageSize, setLaborPageSize] = useState(10);
+  const [laborPage, setLaborPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingTimesheet, setIsSavingTimesheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -298,6 +748,12 @@ export default function ProjectDetailsPage() {
   }, [projectId]);
 
   useEffect(() => {
+    if (!weekStart) {
+      setWeekStart(initialWeekStart);
+    }
+  }, [initialWeekStart, weekStart]);
+
+  useEffect(() => {
     setIsLoading(true);
     loadProjectDetails();
   }, [loadProjectDetails]);
@@ -366,16 +822,33 @@ export default function ProjectDetailsPage() {
   }, [laborLogs, personnelById]);
 
   const filteredLaborLogs = useMemo(() => {
-    if (laborLogPersonFilter === "all") {
-      return laborLogs;
-    }
+    return laborLogs.filter((entry) => {
+      if (laborLogPersonFilter === "unassigned" && entry.person_id) {
+        return false;
+      }
 
-    if (laborLogPersonFilter === "unassigned") {
-      return laborLogs.filter((entry) => !entry.person_id);
-    }
+      if (laborLogPersonFilter !== "all" && laborLogPersonFilter !== "unassigned" && entry.person_id !== laborLogPersonFilter) {
+        return false;
+      }
 
-    return laborLogs.filter((entry) => entry.person_id === laborLogPersonFilter);
-  }, [laborLogs, laborLogPersonFilter]);
+      const workDateKey = entry.work_date ? entry.work_date.slice(0, 10) : "";
+      if (laborLogStartDate || laborLogEndDate) {
+        if (!workDateKey) {
+          return false;
+        }
+
+        if (laborLogStartDate && workDateKey < laborLogStartDate) {
+          return false;
+        }
+
+        if (laborLogEndDate && workDateKey > laborLogEndDate) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [laborLogs, laborLogPersonFilter, laborLogStartDate, laborLogEndDate]);
 
   const filteredLaborSummary = useMemo(() => {
     let totalHours = 0;
@@ -401,103 +874,69 @@ export default function ProjectDetailsPage() {
     return { totalHours, totalPay };
   }, [filteredLaborLogs]);
 
-  const timesheetColumns = useMemo(() => {
-    const dateColumns = weekDates.map((date) =>
-      columnHelper.display({
-        id: date,
-        header: () => formatMonthDay(date),
-        cell: ({ row }) => (
-          <input
-            value={row.original.hoursByDate[date] ?? ""}
-            onChange={(event) => {
-              const raw = event.target.value.replace(/\D/g, "").slice(0, 2);
-              const next = raw !== "" && Number(raw) === 0 ? "" : raw;
-              const personId = row.original.personId;
-              setTimesheetRows((prev) => {
-                return prev.map((entry) => {
-                  if (entry.personId !== personId) {
-                    return entry;
-                  }
+  const materialTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(materialExpenses.length / materialPageSize)),
+    [materialExpenses.length, materialPageSize]
+  );
 
-                  return {
-                    ...entry,
-                    hoursByDate: {
-                      ...entry.hoursByDate,
-                      [date]: next,
-                    },
-                  };
-                });
-              });
-            }}
-            type="text"
-            maxLength={2}
-            inputMode="decimal"
-            className="w-20 rounded-lg border border-zinc-300 bg-white px-2 py-1 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
-          />
-        ),
-      })
-    );
+  const pagedMaterialExpenses = useMemo(() => {
+    const startIndex = (materialPage - 1) * materialPageSize;
+    return materialExpenses.slice(startIndex, startIndex + materialPageSize);
+  }, [materialExpenses, materialPage, materialPageSize]);
 
-    return [
-      columnHelper.accessor("personId", {
-        header: "Person",
-        cell: ({ row }) => (
-          <div>
-            <p className="font-medium text-zinc-900">{row.original.personName}</p>
-          </div>
-        ),
-      }),
-      columnHelper.display({
-        id: "payRate",
-        header: "Pay Rate",
-        cell: ({ row }) => (
-          <input
-            value={row.original.payRate}
-            onChange={(event) => {
-              const next = event.target.value;
-              const personId = row.original.personId;
-              setTimesheetRows((prev) => {
-                return prev.map((entry) => (entry.personId === personId ? { ...entry, payRate: next } : entry));
-              });
-            }}
-            inputMode="decimal"
-            className="w-24 rounded-lg border border-zinc-300 bg-white px-2 py-1 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
-          />
-        ),
-      }),
-      ...dateColumns,
-      columnHelper.display({
-        id: "totalPay",
-        header: "Total Pay",
-        cell: ({ row }) => {
-          const payRate = Number(row.original.payRate);
-          const totalHours = weekDates.reduce((sum, date) => {
-            const value = Number(row.original.hoursByDate[date] ?? 0);
-            if (!Number.isFinite(value) || value <= 0) {
-              return sum;
-            }
-            return sum + value;
-          }, 0);
+  const laborTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredLaborLogs.length / laborPageSize)),
+    [filteredLaborLogs.length, laborPageSize]
+  );
 
-          if (!Number.isFinite(payRate) || payRate <= 0 || totalHours <= 0) {
-            return <span className="text-zinc-500">-</span>;
-          }
+  const pagedLaborLogs = useMemo(() => {
+    const startIndex = (laborPage - 1) * laborPageSize;
+    return filteredLaborLogs.slice(startIndex, startIndex + laborPageSize);
+  }, [filteredLaborLogs, laborPage, laborPageSize]);
 
-          return <span className="font-semibold text-zinc-900">{formatCurrency(totalHours * payRate)}</span>;
-        },
-      }),
-    ];
-  }, [weekDates]);
+  useEffect(() => {
+    setMaterialPage((prev) => Math.min(prev, materialTotalPages));
+  }, [materialTotalPages]);
 
-  const timesheetTable = useReactTable({
-    data: timesheetRows,
-    columns: timesheetColumns,
-    getCoreRowModel: getCoreRowModel(),
-  });
+  useEffect(() => {
+    setLaborPage((prev) => Math.min(prev, laborTotalPages));
+  }, [laborTotalPages]);
+
+  useEffect(() => {
+    setLaborPage(1);
+  }, [laborLogPersonFilter, laborLogStartDate, laborLogEndDate]);
+
+  const updateTimesheetHours = useCallback((personId: string, date: string, nextValue: string) => {
+    setTimesheetRows((prev) => {
+      return prev.map((entry) => {
+        if (entry.personId !== personId) {
+          return entry;
+        }
+
+        return {
+          ...entry,
+          hoursByDate: {
+            ...entry.hoursByDate,
+            [date]: nextValue,
+          },
+        };
+      });
+    });
+  }, []);
+
+  const updateTimesheetPayRate = useCallback((personId: string, nextValue: string) => {
+    setTimesheetRows((prev) => {
+      return prev.map((entry) => (entry.personId === personId ? { ...entry, payRate: nextValue } : entry));
+    });
+  }, []);
 
   async function onSaveTimesheet() {
     setFormError(null);
     setFormMessage(null);
+
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
 
     const token = window.localStorage.getItem("access_token");
     if (!token || !projectId) {
@@ -512,6 +951,7 @@ export default function ProjectDetailsPage() {
       hours_worked: number;
       pay_rate_applied: number;
     }> = [];
+    const deleteIds: string[] = [];
 
     for (const row of timesheetRows) {
       const payRate = Number(row.payRate);
@@ -519,7 +959,12 @@ export default function ProjectDetailsPage() {
 
       for (const date of weekDates) {
         const hoursRaw = row.hoursByDate[date];
+        const existingEntryId = row.entryIdsByDate[date];
+
         if (!hoursRaw || hoursRaw.trim() === "") {
+          if (existingEntryId) {
+            deleteIds.push(existingEntryId);
+          }
           continue;
         }
 
@@ -541,7 +986,7 @@ export default function ProjectDetailsPage() {
         }
 
         entries.push({
-          id: row.entryIdsByDate[date],
+          id: existingEntryId,
           person_id: row.personId,
           work_date: date,
           hours_worked: hours,
@@ -555,7 +1000,7 @@ export default function ProjectDetailsPage() {
       }
     }
 
-    if (entries.length === 0) {
+    if (entries.length === 0 && deleteIds.length === 0) {
       setFormError("Enter at least one hours value before saving.");
       return;
     }
@@ -569,7 +1014,7 @@ export default function ProjectDetailsPage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ entries }),
+        body: JSON.stringify({ entries, deleteIds }),
       });
 
       const payload = (await response.json().catch(() => ({}))) as { message?: string };
@@ -1566,7 +2011,47 @@ export default function ProjectDetailsPage() {
                 No material expenses recorded for this project yet.
               </p>
             ) : (
-              <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                  <p className="text-sm text-zinc-600">
+                    Page {materialPage} of {materialTotalPages}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-2 text-sm text-zinc-700">
+                      <span>Rows</span>
+                      <select
+                        value={materialPageSize}
+                        onChange={(event) => {
+                          setMaterialPageSize(Number(event.target.value));
+                          setMaterialPage(1);
+                        }}
+                        className="rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                      >
+                        <option value={10}>10</option>
+                        <option value={15}>15</option>
+                        <option value={20}>20</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setMaterialPage((prev) => Math.max(1, prev - 1))}
+                      disabled={materialPage <= 1}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMaterialPage((prev) => Math.min(materialTotalPages, prev + 1))}
+                      disabled={materialPage >= materialTotalPages}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-zinc-200 text-sm">
                     <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
@@ -1580,58 +2065,22 @@ export default function ProjectDetailsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
-                      {materialExpenses.map((expense) => (
-                        <tr key={expense.id} className="align-top">
-                          <td className="px-4 py-3 font-medium text-zinc-900">{expense.name}</td>
-                          <td className="px-4 py-3 text-zinc-600">{expense.description ?? "Not provided"}</td>
-                          <td className="px-4 py-3 text-zinc-600">{formatMonthDay(expense.purchase_date)}</td>
-                          <td className="px-4 py-3 text-zinc-600">
-                            {expense.vendor_id ? (vendorsById.get(expense.vendor_id)?.name ?? expense.vendor_id) : "Not linked"}
-                          </td>
-                          <td className="px-4 py-3 font-semibold text-zinc-900">{formatCurrency(expense.cost)}</td>
-                          <td className="px-4 py-3 text-zinc-600">
-                            {expense.receipt_path ? (
-                              <div className="flex flex-col gap-2">
-                                <p className="truncate text-xs text-zinc-500">{getReceiptFileName(expense.receipt_path)}</p>
-                                <div className="flex gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => onViewReceipt(expense.id, expense.receipt_path as string)}
-                                    disabled={receiptActionId === expense.id}
-                                    className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-900 transition hover:border-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    View
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => onDownloadReceipt(expense.id, expense.receipt_path as string)}
-                                    disabled={receiptActionId === expense.id}
-                                    className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
-                                  >
-                                    Download
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="flex flex-col gap-2">
-                                <p className="text-xs text-zinc-500">Not uploaded</p>
-                                <input
-                                  type="file"
-                                  accept="application/pdf,.pdf"
-                                  onChange={(event) => onInlineReceiptFileSelected(expense.id, event.target.files?.[0] ?? null)}
-                                  disabled={uploadingInlineReceiptId === expense.id}
-                                  className="w-full max-w-[240px] rounded-lg border border-zinc-300 bg-white px-2 py-1 text-xs outline-none transition file:mr-2 file:rounded-md file:border-0 file:bg-zinc-900 file:px-2 file:py-1 file:text-[10px] file:font-semibold file:text-white hover:file:bg-zinc-700"
-                                />
-                                {uploadingInlineReceiptId === expense.id ? (
-                                  <p className="text-xs font-medium text-zinc-600">Uploading...</p>
-                                ) : null}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
+                      {pagedMaterialExpenses.map((expense) => (
+                        <MaterialExpensesTableRow
+                          key={expense.id}
+                          expense={expense}
+                          vendorName={expense.vendor_id ? (vendorsById.get(expense.vendor_id)?.name ?? expense.vendor_id) : "Not linked"}
+                          receiptFileName={expense.receipt_path ? getReceiptFileName(expense.receipt_path) : ""}
+                          isReceiptActionActive={receiptActionId === expense.id}
+                          isUploadingInlineReceipt={uploadingInlineReceiptId === expense.id}
+                          onViewReceipt={onViewReceipt}
+                          onDownloadReceipt={onDownloadReceipt}
+                          onInlineReceiptFileSelected={onInlineReceiptFileSelected}
+                        />
                       ))}
                     </tbody>
                   </table>
+                </div>
                 </div>
               </div>
             )}
@@ -1655,110 +2104,26 @@ export default function ProjectDetailsPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Timesheet Grid</p>
-              <p className="mt-2 text-sm text-zinc-600">
-                Enter hours by person and day. Use the week start picker to change the visible week.
-              </p>
-
-              <div className="mt-4 grid gap-3 md:grid-cols-[220px_1fr_auto] md:items-end">
-                <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-zinc-700">Week Start (Monday)</span>
-                  <input
-                    type="date"
-                    value={weekStart}
-                    onChange={(event) => setWeekStart(event.target.value)}
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-zinc-700">Add Worker Row</span>
-                  <select
-                    value={selectedPersonId}
-                    onChange={(event) => setSelectedPersonId(event.target.value)}
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
-                  >
-                    <option value="">Select worker...</option>
-                    {personnel.map((person) => (
-                      <option key={person.id} value={person.id}>
-                        {person.name}
-                        {person.worker_type ? ` (${person.worker_type})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <button
-                  type="button"
-                  onClick={addTimesheetRow}
-                  className="rounded-xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-900 transition hover:border-zinc-900"
-                >
-                  Add Row
-                </button>
-              </div>
-
-              <div className="mt-4 overflow-hidden rounded-2xl border border-zinc-200 bg-white">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-zinc-200 text-sm">
-                    <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                      {timesheetTable.getHeaderGroups().map((headerGroup) => (
-                        <tr key={headerGroup.id}>
-                          {headerGroup.headers.map((header) => (
-                            <th key={header.id} className="px-3 py-3">
-                              {header.isPlaceholder
-                                ? null
-                                : flexRender(header.column.columnDef.header, header.getContext())}
-                            </th>
-                          ))}
-                        </tr>
-                      ))}
-                    </thead>
-                    <tbody className="divide-y divide-zinc-200">
-                      {timesheetTable.getRowModel().rows.length === 0 ? (
-                        <tr>
-                          <td className="px-4 py-4 text-zinc-600" colSpan={Math.max(timesheetColumns.length, 1)}>
-                            No people in this week yet. Add a person row to start entering hours.
-                          </td>
-                        </tr>
-                      ) : (
-                        timesheetTable.getRowModel().rows.map((row) => (
-                          <tr key={row.id} className="align-top">
-                            {row.getVisibleCells().map((cell) => (
-                              <td key={cell.id} className="px-3 py-2">
-                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                              </td>
-                            ))}
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-3">
-                <button
-                  type="button"
-                  onClick={onSaveTimesheet}
-                  disabled={isSavingTimesheet}
-                  className="w-fit rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
-                >
-                  {isSavingTimesheet ? "Saving..." : "Save Timesheet"}
-                </button>
-
-                {formError ? (
-                  <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{formError}</p>
-                ) : null}
-                {formMessage ? (
-                  <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{formMessage}</p>
-                ) : null}
-              </div>
-            </div>
+            <TimesheetSection
+              weekStart={weekStart}
+              onWeekStartChange={setWeekStart}
+              selectedPersonId={selectedPersonId}
+              onSelectedPersonIdChange={setSelectedPersonId}
+              personnel={personnel}
+              timesheetRows={timesheetRows}
+              weekDates={weekDates}
+              onAddTimesheetRow={addTimesheetRow}
+              onUpdateTimesheetHours={updateTimesheetHours}
+              onUpdateTimesheetPayRate={updateTimesheetPayRate}
+              onSaveTimesheet={onSaveTimesheet}
+              isSavingTimesheet={isSavingTimesheet}
+              formError={formError}
+              formMessage={formMessage}
+            />
 
             <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
               <div className="flex flex-wrap items-end gap-3">
-                <label className="block w-full max-w-sm">
+                <label className="block w-full max-w-[11rem]">
                   <span className="mb-2 block text-sm font-medium text-zinc-700">Filter Person</span>
                   <select
                     value={laborLogPersonFilter}
@@ -1775,6 +2140,41 @@ export default function ProjectDetailsPage() {
                   </select>
                 </label>
 
+                <label className="block w-full max-w-[11rem]">
+                  <span className="mb-2 block text-sm font-medium text-zinc-700">Start Date</span>
+                  <input
+                    type="date"
+                    value={laborLogStartDate}
+                    onChange={(event) => setLaborLogStartDate(event.target.value)}
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                  />
+                </label>
+
+                <label className="block w-full max-w-[11rem]">
+                  <span className="mb-2 block text-sm font-medium text-zinc-700">End Date</span>
+                  <input
+                    type="date"
+                    value={laborLogEndDate}
+                    onChange={(event) => setLaborLogEndDate(event.target.value)}
+                    min={laborLogStartDate || undefined}
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLaborLogPersonFilter("all");
+                    setLaborLogStartDate("");
+                    setLaborLogEndDate("");
+                  }}
+                  className="h-[46px] whitespace-nowrap rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-700 outline-none transition hover:border-zinc-400 hover:text-zinc-900 focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                >
+                  Clear
+                </button>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-end gap-3">
                 <div className="rounded-xl border border-zinc-200 bg-white px-4 py-2.5">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Total Hours</p>
                   <p className="mt-0.5 text-base font-semibold text-zinc-900">
@@ -1794,10 +2194,50 @@ export default function ProjectDetailsPage() {
 
             {filteredLaborLogs.length === 0 ? (
               <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">
-                No labor log entries match this person filter.
+                No labor log entries match the selected filters.
               </p>
             ) : (
-              <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                  <p className="text-sm text-zinc-600">
+                    Page {laborPage} of {laborTotalPages}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-2 text-sm text-zinc-700">
+                      <span>Rows</span>
+                      <select
+                        value={laborPageSize}
+                        onChange={(event) => {
+                          setLaborPageSize(Number(event.target.value));
+                          setLaborPage(1);
+                        }}
+                        className="rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                      >
+                        <option value={10}>10</option>
+                        <option value={15}>15</option>
+                        <option value={20}>20</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setLaborPage((prev) => Math.max(1, prev - 1))}
+                      disabled={laborPage <= 1}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLaborPage((prev) => Math.min(laborTotalPages, prev + 1))}
+                      disabled={laborPage >= laborTotalPages}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-zinc-200 text-sm">
                     <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
@@ -1810,23 +2250,16 @@ export default function ProjectDetailsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
-                      {filteredLaborLogs.map((entry) => (
-                        <tr key={entry.id} className="align-top">
-                          <td className="px-4 py-3 text-zinc-600">{formatMonthDay(entry.work_date)}</td>
-                          <td className="px-4 py-3 text-zinc-600">
-                            {entry.person_id ? (personnelById.get(entry.person_id)?.name ?? "Unknown personnel") : "Not linked"}
-                          </td>
-                          <td className="px-4 py-3 text-zinc-600">{entry.hours_worked ?? 0}</td>
-                          <td className="px-4 py-3 text-zinc-600">
-                            {entry.pay_rate_applied !== null ? formatCurrency(entry.pay_rate_applied) : "Not set"}
-                          </td>
-                          <td className="px-4 py-3 font-semibold text-zinc-900">
-                            {entry.total_labor_cost !== null ? formatCurrency(entry.total_labor_cost) : formatCurrency(0)}
-                          </td>
-                        </tr>
+                      {pagedLaborLogs.map((entry) => (
+                        <LaborLogsTableRow
+                          key={entry.id}
+                          entry={entry}
+                          personName={entry.person_id ? (personnelById.get(entry.person_id)?.name ?? "Unknown personnel") : "Not linked"}
+                        />
                       ))}
                     </tbody>
                   </table>
+                </div>
                 </div>
               </div>
             )}

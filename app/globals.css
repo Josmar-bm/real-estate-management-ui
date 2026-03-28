@@ -23,6 +23,17 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), "Segoe UI", sans-serif;
+  /* Help browser optimize CSS selector matching by isolating rendering context */
+  contain: layout style paint;
+}
+
+/* Reduce selector matching overhead for frequently-used utility containers */
+[class*="space-y-"] > * {
+  contain: layout style;
+}
+
+[class*="divide-"] > * {
+  contain: layout style;
 }
 
 @media (prefers-reduced-motion: no-preference) {
