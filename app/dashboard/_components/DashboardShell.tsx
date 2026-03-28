@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useState, useTransition } from "react";
 
 type DashboardShellProps = {
   children: ReactNode;
@@ -23,9 +23,10 @@ export function DashboardShell({ children }: DashboardShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [isLoadingProfile, startLoadingProfile] = useTransition();
 
-  const accessToken =
-    typeof window !== "undefined" ? window.localStorage.getItem("access_token") : null;
   const hasToken = Boolean(accessToken);
 
   let activePageTitle = navItems.find((item) => item.href === pathname)?.label ?? "Dashboard";
@@ -37,11 +38,17 @@ export function DashboardShell({ children }: DashboardShellProps) {
   const email = profile?.email ?? "No email";
 
   useEffect(() => {
-    if (!hasToken) {
+    setAccessToken(window.localStorage.getItem("access_token"));
+    setIsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (isHydrated && !hasToken) {
       router.replace("/login");
     }
-  }, [hasToken, router]);
+  }, [hasToken, isHydrated, router]);
 
+  // Load profile in background without blocking render (useTransition prevents blocking)
   useEffect(() => {
     if (!accessToken) {
       return;
@@ -66,9 +73,11 @@ export function DashboardShell({ children }: DashboardShellProps) {
         };
 
         if (!isCancelled) {
-          setProfile({
-            displayName: payload.user?.displayName ?? "Agent",
-            email: payload.user?.email ?? "No email",
+          startLoadingProfile(() => {
+            setProfile({
+              displayName: payload.user?.displayName ?? "Agent",
+              email: payload.user?.email ?? "No email",
+            });
           });
         }
       } catch {
@@ -83,14 +92,15 @@ export function DashboardShell({ children }: DashboardShellProps) {
     return () => {
       isCancelled = true;
     };
-  }, [accessToken, pathname]);
+  }, [accessToken]);
 
   function signOut() {
     window.localStorage.removeItem("access_token");
+    setAccessToken(null);
     router.replace("/login");
   }
 
-  if (!hasToken) {
+  if (!isHydrated || !hasToken) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[linear-gradient(145deg,#f5f1e8_0%,#f9f8f4_45%,#eaf4f1_100%)] px-6 text-zinc-700">
         <p className="rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-medium shadow-sm">
@@ -143,7 +153,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
               <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900">{activePageTitle}</h1>
             </div>
 
-            <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm">
+            <div className={`rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm ${isLoadingProfile ? "opacity-60" : ""}`}>
               <p className="font-semibold text-zinc-900">{displayName}</p>
               <p className="text-zinc-600">{email}</p>
             </div>
