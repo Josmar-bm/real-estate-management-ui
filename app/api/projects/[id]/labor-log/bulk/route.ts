@@ -190,17 +190,22 @@ export async function POST(
       savedRows = upsertPayload as LaborLogRecord[];
     }
 
-    if (uniqueDeleteIds.length > 0) {
-      const deleteEndpoint = new URL(`${config.supabaseUrl}/rest/v1/labor_log`);
-      deleteEndpoint.searchParams.set("project_id", `eq.${projectId}`);
-      deleteEndpoint.searchParams.set("id", `in.(${uniqueDeleteIds.join(",")})`);
+    let actualDeletedCount = 0;
 
-      const deleteResponse = await fetch(deleteEndpoint.toString(), {
+    if (uniqueDeleteIds.length > 0) {
+      // Build the URL as a raw string to avoid URLSearchParams percent-encoding
+      // the parens and commas in the PostgREST in.() filter syntax.
+      const deleteUrl =
+        `${config.supabaseUrl}/rest/v1/labor_log` +
+        `?project_id=eq.${projectId}` +
+        `&id=in.(${uniqueDeleteIds.join(",")})`;
+
+      const deleteResponse = await fetch(deleteUrl, {
         method: "DELETE",
         headers: {
           apikey: config.supabaseAnonKey,
           Authorization: `Bearer ${token}`,
-          Prefer: "return=minimal",
+          Prefer: "return=representation",
         },
       });
 
@@ -222,10 +227,13 @@ export async function POST(
           { status: deleteResponse.status }
         );
       }
+
+      const deletedRows = (await deleteResponse.json().catch(() => [])) as LaborLogRecord[];
+      actualDeletedCount = Array.isArray(deletedRows) ? deletedRows.length : 0;
     }
 
     return NextResponse.json(
-      { laborLogs: savedRows, savedCount: rows.length, deletedCount: uniqueDeleteIds.length },
+      { laborLogs: savedRows, savedCount: rows.length, deletedCount: actualDeletedCount },
       { status: 200 }
     );
   });

@@ -108,6 +108,22 @@ const projectStatusOptions = ["planning", "in-progress", "on-hold", "completed"]
 
 const columnHelper = createColumnHelper<TimesheetRow>();
 
+function parseDateValue(value: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    return new Date(year, month - 1, day);
+  }
+
+  return new Date(value);
+}
+
+function toDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -121,7 +137,7 @@ function formatDate(value: string | null) {
     return "Not set";
   }
 
-  const date = new Date(value);
+  const date = parseDateValue(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
@@ -138,7 +154,7 @@ function formatMonthDay(value: string | null) {
     return "Not set";
   }
 
-  const date = new Date(value);
+  const date = parseDateValue(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
@@ -154,7 +170,7 @@ function formatMonthDayWithWeekday(value: string | null) {
     return { monthDay: "Not set", weekday: "" };
   }
 
-  const date = new Date(value);
+  const date = parseDateValue(value);
   if (Number.isNaN(date.getTime())) {
     return { monthDay: value, weekday: "" };
   }
@@ -606,9 +622,10 @@ export default function ProjectDetailsPage() {
     const diffToMonday = day === 0 ? -6 : 1 - day;
     const monday = new Date(today);
     monday.setDate(today.getDate() + diffToMonday);
-    return monday.toISOString().slice(0, 10);
+    return toDateKey(monday);
   });
   const [timesheetRows, setTimesheetRows] = useState<TimesheetRow[]>([]);
+  const timesheetRowsRef = useRef<TimesheetRow[]>([]);
   const [personnel, setPersonnel] = useState<Personnel[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [selectedPersonId, setSelectedPersonId] = useState("");
@@ -653,15 +670,17 @@ export default function ProjectDetailsPage() {
   const [purchaseDate, setPurchaseDate] = useState("");
 
   const weekDates = useMemo(() => {
-    const base = new Date(`${weekStart}T00:00:00`);
-    if (Number.isNaN(base.getTime())) {
+    const parsedBase = parseDateValue(weekStart);
+    if (Number.isNaN(parsedBase.getTime())) {
       return [] as string[];
     }
+
+    const base = new Date(parsedBase.getFullYear(), parsedBase.getMonth(), parsedBase.getDate());
 
     return Array.from({ length: 7 }, (_, index) => {
       const day = new Date(base);
       day.setDate(base.getDate() + index);
-      return day.toISOString().slice(0, 10);
+      return toDateKey(day);
     });
   }, [weekStart]);
 
@@ -760,6 +779,7 @@ export default function ProjectDetailsPage() {
 
   useEffect(() => {
     if (weekDates.length === 0) {
+      timesheetRowsRef.current = [];
       setTimesheetRows([]);
       return;
     }
@@ -797,7 +817,9 @@ export default function ProjectDetailsPage() {
       }
     }
 
-    setTimesheetRows(Array.from(map.values()));
+    const nextRows = Array.from(map.values());
+    timesheetRowsRef.current = nextRows;
+    setTimesheetRows(nextRows);
   }, [laborLogs, weekDates, personnelById]);
 
   const materialExpenseCount = useMemo(() => materialExpenses.length, [materialExpenses]);
@@ -907,27 +929,31 @@ export default function ProjectDetailsPage() {
   }, [laborLogPersonFilter, laborLogStartDate, laborLogEndDate]);
 
   const updateTimesheetHours = useCallback((personId: string, date: string, nextValue: string) => {
-    setTimesheetRows((prev) => {
-      return prev.map((entry) => {
-        if (entry.personId !== personId) {
-          return entry;
-        }
+    const nextRows = timesheetRowsRef.current.map((entry) => {
+      if (entry.personId !== personId) {
+        return entry;
+      }
 
-        return {
-          ...entry,
-          hoursByDate: {
-            ...entry.hoursByDate,
-            [date]: nextValue,
-          },
-        };
-      });
+      return {
+        ...entry,
+        hoursByDate: {
+          ...entry.hoursByDate,
+          [date]: nextValue,
+        },
+      };
     });
+
+    timesheetRowsRef.current = nextRows;
+    setTimesheetRows(nextRows);
   }, []);
 
   const updateTimesheetPayRate = useCallback((personId: string, nextValue: string) => {
-    setTimesheetRows((prev) => {
-      return prev.map((entry) => (entry.personId === personId ? { ...entry, payRate: nextValue } : entry));
-    });
+    const nextRows = timesheetRowsRef.current.map((entry) =>
+      entry.personId === personId ? { ...entry, payRate: nextValue } : entry
+    );
+
+    timesheetRowsRef.current = nextRows;
+    setTimesheetRows(nextRows);
   }, []);
 
   async function onSaveTimesheet() {
@@ -937,6 +963,11 @@ export default function ProjectDetailsPage() {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
+
+    // Let blur-driven commits flush before creating entries/deleteIds.
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
 
     const token = window.localStorage.getItem("access_token");
     if (!token || !projectId) {
@@ -953,7 +984,7 @@ export default function ProjectDetailsPage() {
     }> = [];
     const deleteIds: string[] = [];
 
-    for (const row of timesheetRows) {
+    for (const row of timesheetRowsRef.current) {
       const payRate = Number(row.payRate);
       let hasPositiveHours = false;
 
@@ -975,6 +1006,9 @@ export default function ProjectDetailsPage() {
         }
 
         if (hours === 0) {
+          if (existingEntryId) {
+            deleteIds.push(existingEntryId);
+          }
           continue;
         }
 
@@ -1001,7 +1035,7 @@ export default function ProjectDetailsPage() {
     }
 
     if (entries.length === 0 && deleteIds.length === 0) {
-      setFormError("Enter at least one hours value before saving.");
+      setFormError("No changes to save.");
       return;
     }
 
@@ -1017,13 +1051,26 @@ export default function ProjectDetailsPage() {
         body: JSON.stringify({ entries, deleteIds }),
       });
 
-      const payload = (await response.json().catch(() => ({}))) as { message?: string };
+      const payload = (await response.json().catch(() => ({}))) as {
+        message?: string;
+        savedCount?: number;
+        deletedCount?: number;
+      };
       if (!response.ok) {
         setFormError(payload.message ?? "Unable to save timesheet entries.");
         return;
       }
 
-      setFormMessage("Timesheet saved successfully.");
+      // Optimistically remove deleted entries from state so cells
+      // don't flash back during the loadProjectDetails round-trip.
+      if (deleteIds.length > 0) {
+        const deletedIdSet = new Set(deleteIds);
+        setLaborLogs((prev) => prev.filter((log) => !deletedIdSet.has(log.id)));
+      }
+      const parts: string[] = [];
+      if ((payload.savedCount ?? 0) > 0) parts.push(`${payload.savedCount} saved`);
+      if ((payload.deletedCount ?? 0) > 0) parts.push(`${payload.deletedCount} deleted`);
+      setFormMessage(parts.length > 0 ? `Timesheet saved (${parts.join(", ")}).` : "Timesheet saved.");
       await loadProjectDetails();
     } catch {
       setFormError("Unable to save timesheet right now.");
@@ -1044,8 +1091,8 @@ export default function ProjectDetailsPage() {
       return;
     }
 
-    setTimesheetRows((prev) => [
-      ...prev,
+    const nextRows = [
+      ...timesheetRowsRef.current,
       {
         personId,
         personName: personnelById.get(personId)?.name ?? personId,
@@ -1053,7 +1100,10 @@ export default function ProjectDetailsPage() {
         hoursByDate: {},
         entryIdsByDate: {},
       },
-    ]);
+    ];
+
+    timesheetRowsRef.current = nextRows;
+    setTimesheetRows(nextRows);
     setSelectedPersonId("");
     setFormError(null);
   }
