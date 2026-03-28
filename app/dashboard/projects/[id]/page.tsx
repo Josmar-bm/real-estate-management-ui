@@ -146,6 +146,28 @@ function formatMonthDay(value: string | null) {
   }).format(date);
 }
 
+function formatMonthDayWithWeekday(value: string | null) {
+  if (!value) {
+    return { monthDay: "Not set", weekday: "" };
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return { monthDay: value, weekday: "" };
+  }
+
+  const monthDay = new Intl.DateTimeFormat("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+  }).format(date);
+
+  return { monthDay, weekday };
+}
+
 export default function ProjectDetailsPage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id;
@@ -169,6 +191,12 @@ export default function ProjectDetailsPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [selectedPersonId, setSelectedPersonId] = useState("");
   const [laborLogPersonFilter, setLaborLogPersonFilter] = useState("all");
+  const [laborLogStartDate, setLaborLogStartDate] = useState("");
+  const [laborLogEndDate, setLaborLogEndDate] = useState("");
+  const [materialPageSize, setMaterialPageSize] = useState(10);
+  const [materialPage, setMaterialPage] = useState(1);
+  const [laborPageSize, setLaborPageSize] = useState(10);
+  const [laborPage, setLaborPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingTimesheet, setIsSavingTimesheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -366,16 +394,33 @@ export default function ProjectDetailsPage() {
   }, [laborLogs, personnelById]);
 
   const filteredLaborLogs = useMemo(() => {
-    if (laborLogPersonFilter === "all") {
-      return laborLogs;
-    }
+    return laborLogs.filter((entry) => {
+      if (laborLogPersonFilter === "unassigned" && entry.person_id) {
+        return false;
+      }
 
-    if (laborLogPersonFilter === "unassigned") {
-      return laborLogs.filter((entry) => !entry.person_id);
-    }
+      if (laborLogPersonFilter !== "all" && laborLogPersonFilter !== "unassigned" && entry.person_id !== laborLogPersonFilter) {
+        return false;
+      }
 
-    return laborLogs.filter((entry) => entry.person_id === laborLogPersonFilter);
-  }, [laborLogs, laborLogPersonFilter]);
+      const workDateKey = entry.work_date ? entry.work_date.slice(0, 10) : "";
+      if (laborLogStartDate || laborLogEndDate) {
+        if (!workDateKey) {
+          return false;
+        }
+
+        if (laborLogStartDate && workDateKey < laborLogStartDate) {
+          return false;
+        }
+
+        if (laborLogEndDate && workDateKey > laborLogEndDate) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [laborLogs, laborLogPersonFilter, laborLogStartDate, laborLogEndDate]);
 
   const filteredLaborSummary = useMemo(() => {
     let totalHours = 0;
@@ -401,11 +446,51 @@ export default function ProjectDetailsPage() {
     return { totalHours, totalPay };
   }, [filteredLaborLogs]);
 
+  const materialTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(materialExpenses.length / materialPageSize)),
+    [materialExpenses.length, materialPageSize]
+  );
+
+  const pagedMaterialExpenses = useMemo(() => {
+    const startIndex = (materialPage - 1) * materialPageSize;
+    return materialExpenses.slice(startIndex, startIndex + materialPageSize);
+  }, [materialExpenses, materialPage, materialPageSize]);
+
+  const laborTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredLaborLogs.length / laborPageSize)),
+    [filteredLaborLogs.length, laborPageSize]
+  );
+
+  const pagedLaborLogs = useMemo(() => {
+    const startIndex = (laborPage - 1) * laborPageSize;
+    return filteredLaborLogs.slice(startIndex, startIndex + laborPageSize);
+  }, [filteredLaborLogs, laborPage, laborPageSize]);
+
+  useEffect(() => {
+    setMaterialPage((prev) => Math.min(prev, materialTotalPages));
+  }, [materialTotalPages]);
+
+  useEffect(() => {
+    setLaborPage((prev) => Math.min(prev, laborTotalPages));
+  }, [laborTotalPages]);
+
+  useEffect(() => {
+    setLaborPage(1);
+  }, [laborLogPersonFilter, laborLogStartDate, laborLogEndDate]);
+
   const timesheetColumns = useMemo(() => {
     const dateColumns = weekDates.map((date) =>
       columnHelper.display({
         id: date,
-        header: () => formatMonthDay(date),
+        header: () => {
+          const parts = formatMonthDayWithWeekday(date);
+          return (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span>{parts.monthDay}</span>
+              {parts.weekday ? <span className="text-zinc-400 normal-case">{parts.weekday}</span> : null}
+            </span>
+          );
+        },
         cell: ({ row }) => (
           <input
             value={row.original.hoursByDate[date] ?? ""}
@@ -451,18 +536,21 @@ export default function ProjectDetailsPage() {
         id: "payRate",
         header: "Pay Rate",
         cell: ({ row }) => (
-          <input
-            value={row.original.payRate}
-            onChange={(event) => {
-              const next = event.target.value;
-              const personId = row.original.personId;
-              setTimesheetRows((prev) => {
-                return prev.map((entry) => (entry.personId === personId ? { ...entry, payRate: next } : entry));
-              });
-            }}
-            inputMode="decimal"
-            className="w-24 rounded-lg border border-zinc-300 bg-white px-2 py-1 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
-          />
+          <div className="relative">
+            <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-zinc-500">$</span>
+            <input
+              value={row.original.payRate}
+              onChange={(event) => {
+                const next = event.target.value;
+                const personId = row.original.personId;
+                setTimesheetRows((prev) => {
+                  return prev.map((entry) => (entry.personId === personId ? { ...entry, payRate: next } : entry));
+                });
+              }}
+              inputMode="decimal"
+              className="w-24 rounded-lg border border-zinc-300 bg-white py-1 pl-5 pr-2 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+            />
+          </div>
         ),
       }),
       ...dateColumns,
@@ -512,6 +600,7 @@ export default function ProjectDetailsPage() {
       hours_worked: number;
       pay_rate_applied: number;
     }> = [];
+    const deleteIds: string[] = [];
 
     for (const row of timesheetRows) {
       const payRate = Number(row.payRate);
@@ -519,7 +608,12 @@ export default function ProjectDetailsPage() {
 
       for (const date of weekDates) {
         const hoursRaw = row.hoursByDate[date];
+        const existingEntryId = row.entryIdsByDate[date];
+
         if (!hoursRaw || hoursRaw.trim() === "") {
+          if (existingEntryId) {
+            deleteIds.push(existingEntryId);
+          }
           continue;
         }
 
@@ -541,7 +635,7 @@ export default function ProjectDetailsPage() {
         }
 
         entries.push({
-          id: row.entryIdsByDate[date],
+          id: existingEntryId,
           person_id: row.personId,
           work_date: date,
           hours_worked: hours,
@@ -555,7 +649,7 @@ export default function ProjectDetailsPage() {
       }
     }
 
-    if (entries.length === 0) {
+    if (entries.length === 0 && deleteIds.length === 0) {
       setFormError("Enter at least one hours value before saving.");
       return;
     }
@@ -569,7 +663,7 @@ export default function ProjectDetailsPage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ entries }),
+        body: JSON.stringify({ entries, deleteIds }),
       });
 
       const payload = (await response.json().catch(() => ({}))) as { message?: string };
@@ -1566,7 +1660,47 @@ export default function ProjectDetailsPage() {
                 No material expenses recorded for this project yet.
               </p>
             ) : (
-              <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                  <p className="text-sm text-zinc-600">
+                    Page {materialPage} of {materialTotalPages}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-2 text-sm text-zinc-700">
+                      <span>Rows</span>
+                      <select
+                        value={materialPageSize}
+                        onChange={(event) => {
+                          setMaterialPageSize(Number(event.target.value));
+                          setMaterialPage(1);
+                        }}
+                        className="rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                      >
+                        <option value={10}>10</option>
+                        <option value={15}>15</option>
+                        <option value={20}>20</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setMaterialPage((prev) => Math.max(1, prev - 1))}
+                      disabled={materialPage <= 1}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMaterialPage((prev) => Math.min(materialTotalPages, prev + 1))}
+                      disabled={materialPage >= materialTotalPages}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-zinc-200 text-sm">
                     <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
@@ -1580,7 +1714,7 @@ export default function ProjectDetailsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
-                      {materialExpenses.map((expense) => (
+                      {pagedMaterialExpenses.map((expense) => (
                         <tr key={expense.id} className="align-top">
                           <td className="px-4 py-3 font-medium text-zinc-900">{expense.name}</td>
                           <td className="px-4 py-3 text-zinc-600">{expense.description ?? "Not provided"}</td>
@@ -1632,6 +1766,7 @@ export default function ProjectDetailsPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
                 </div>
               </div>
             )}
@@ -1705,7 +1840,7 @@ export default function ProjectDetailsPage() {
                       {timesheetTable.getHeaderGroups().map((headerGroup) => (
                         <tr key={headerGroup.id}>
                           {headerGroup.headers.map((header) => (
-                            <th key={header.id} className="px-3 py-3">
+                            <th key={header.id} className="whitespace-nowrap px-3 py-3">
                               {header.isPlaceholder
                                 ? null
                                 : flexRender(header.column.columnDef.header, header.getContext())}
@@ -1758,7 +1893,7 @@ export default function ProjectDetailsPage() {
 
             <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
               <div className="flex flex-wrap items-end gap-3">
-                <label className="block w-full max-w-sm">
+                <label className="block w-full max-w-[11rem]">
                   <span className="mb-2 block text-sm font-medium text-zinc-700">Filter Person</span>
                   <select
                     value={laborLogPersonFilter}
@@ -1775,6 +1910,41 @@ export default function ProjectDetailsPage() {
                   </select>
                 </label>
 
+                <label className="block w-full max-w-[11rem]">
+                  <span className="mb-2 block text-sm font-medium text-zinc-700">Start Date</span>
+                  <input
+                    type="date"
+                    value={laborLogStartDate}
+                    onChange={(event) => setLaborLogStartDate(event.target.value)}
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                  />
+                </label>
+
+                <label className="block w-full max-w-[11rem]">
+                  <span className="mb-2 block text-sm font-medium text-zinc-700">End Date</span>
+                  <input
+                    type="date"
+                    value={laborLogEndDate}
+                    onChange={(event) => setLaborLogEndDate(event.target.value)}
+                    min={laborLogStartDate || undefined}
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLaborLogPersonFilter("all");
+                    setLaborLogStartDate("");
+                    setLaborLogEndDate("");
+                  }}
+                  className="h-[46px] whitespace-nowrap rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-700 outline-none transition hover:border-zinc-400 hover:text-zinc-900 focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                >
+                  Clear
+                </button>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-end gap-3">
                 <div className="rounded-xl border border-zinc-200 bg-white px-4 py-2.5">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Total Hours</p>
                   <p className="mt-0.5 text-base font-semibold text-zinc-900">
@@ -1794,10 +1964,50 @@ export default function ProjectDetailsPage() {
 
             {filteredLaborLogs.length === 0 ? (
               <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">
-                No labor log entries match this person filter.
+                No labor log entries match the selected filters.
               </p>
             ) : (
-              <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2">
+                  <p className="text-sm text-zinc-600">
+                    Page {laborPage} of {laborTotalPages}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-2 text-sm text-zinc-700">
+                      <span>Rows</span>
+                      <select
+                        value={laborPageSize}
+                        onChange={(event) => {
+                          setLaborPageSize(Number(event.target.value));
+                          setLaborPage(1);
+                        }}
+                        className="rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-200"
+                      >
+                        <option value={10}>10</option>
+                        <option value={15}>15</option>
+                        <option value={20}>20</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setLaborPage((prev) => Math.max(1, prev - 1))}
+                      disabled={laborPage <= 1}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLaborPage((prev) => Math.min(laborTotalPages, prev + 1))}
+                      disabled={laborPage >= laborTotalPages}
+                      className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-zinc-200 text-sm">
                     <thead className="bg-zinc-50 text-left text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
@@ -1810,7 +2020,7 @@ export default function ProjectDetailsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
-                      {filteredLaborLogs.map((entry) => (
+                      {pagedLaborLogs.map((entry) => (
                         <tr key={entry.id} className="align-top">
                           <td className="px-4 py-3 text-zinc-600">{formatMonthDay(entry.work_date)}</td>
                           <td className="px-4 py-3 text-zinc-600">
@@ -1827,6 +2037,7 @@ export default function ProjectDetailsPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
                 </div>
               </div>
             )}
