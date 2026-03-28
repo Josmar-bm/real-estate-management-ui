@@ -146,7 +146,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
           </button>
         </aside>
 
-        <section className="jbm-fade-up-delay rounded-3xl border border-zinc-300/70 bg-white/90 p-6 shadow-[0_15px_45px_-30px_rgba(15,23,42,0.55)] backdrop-blur-sm sm:p-8">
+        <section className="rounded-3xl border border-zinc-300/70 bg-white/90 p-6 shadow-[0_15px_45px_-30px_rgba(15,23,42,0.55)] sm:p-8">
           <header className="mb-8 flex flex-col gap-4 border-b border-zinc-200 pb-6 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Dashboard</p>
